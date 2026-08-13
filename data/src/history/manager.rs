@@ -834,7 +834,7 @@ impl Manager {
         &self,
         buffer: &buffer::Upstream,
     ) -> HashMap<Nick, DateTime<Utc>> {
-        let kind = history::Kind::from_input_buffer(buffer.clone());
+        let kind = history::Kind::from(buffer.clone());
 
         self.data
             .map
@@ -2309,17 +2309,4 @@ fn smart_filter_repeat(
         .num_seconds();
 
     duration_seconds <= *seconds
-}
-
-fn smart_filter_internal_message(
-    message: &crate::Message,
-    seconds: &i64,
-) -> bool {
-    let current_time = Utc::now();
-
-    let duration_seconds = current_time
-        .signed_duration_since(message.server_time)
-        .num_seconds();
-
-    duration_seconds > *seconds
 }

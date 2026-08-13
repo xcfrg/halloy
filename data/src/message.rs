@@ -332,10 +332,15 @@ impl Target {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Direction {
-    Sent,
-    Received,
+    Sent {
+        command: Option<command::Irc>,
+    },
+    Received {
+        is_echo: bool,
+        received_with_server_time: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -377,20 +382,43 @@ pub struct Message {
     pub target: Target,
     pub content: Content,
     pub id: Option<Id>,
-    pub reply_to: Option<Id>,
-    pub reply_preview: Option<ReplyPreview>,
-    pub hash: Hash,
+    pub hash: Hash, // UUID?
     pub hidden_urls: HashSet<Url>,
-    pub is_echo: bool, // Only relevant if direction == Direction::Received
-    pub received_with_server_time: bool, // Only relevant if direction == Direction::Received
-    pub blocked: bool,
-    pub condensed: Option<Arc<Message>>,
-    pub expanded: bool, // Only relevant if can_condense or redaction.is_some()
-    pub command: Option<command::Irc>, // Only relevant if direction == Direction::Sent
     pub reactions: Vec<Reaction>,
     pub rerouted_from: Option<Target>,
-    pub deduplicate: bool,
     pub redaction: Option<Redaction>,
+    pub reply_to: Option<Id>,
+}
+
+pub struct MessageWithContext {
+    pub message: Message,
+    pub historical: bool, // i.e. from chathistory or ZNC-playback (needs deduplication)
+    pub labeled_response: Option<LabeledResponseContext>,
+}
+
+pub struct MessageDisplay {
+    pub message: Message,
+    pub blocked: bool,
+    pub condensed: Option<Arc<MessageDisplay>>,
+    pub expanded: bool, // Only relevant if message.can_condense or message.redaction.is_some()
+    pub reply_preview: Option<ReplyPreview>,
+}
+
+impl MessageDisplay {
+    pub fn server_time(&self) -> &DateTime<Utc> {
+        &self.message.server_time
+    }
+
+    pub fn source(&self) -> &Source {
+        self.message.target.source()
+    }
+
+    pub fn can_condense(
+        &self,
+        condensation_config: &config::buffer::Condensation,
+    ) -> bool {
+        self.message.can_condense(condensation_config)
+    }
 }
 
 impl Message {
@@ -459,10 +487,10 @@ impl Message {
 
     pub fn can_condense(
         &self,
-        condense: &config::buffer::Condensation,
+        condensation_config: &config::buffer::Condensation,
     ) -> bool {
         if let Source::Server(Some(source)) = self.target.source() {
-            condense.kind(source)
+            condensation_config.kind(source)
         } else {
             false
         }
@@ -3896,7 +3924,7 @@ fn content<'a>(
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Limit {
     Top(usize),
-    Bottom(usize),
+    Bottom(usize, Option<DateTime<Utc>>),
     Since(DateTime<Utc>),
     Around(usize, Hash),
 }

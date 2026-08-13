@@ -2188,8 +2188,7 @@ impl State {
                         return (Task::none(), None);
                     }
                     command::Internal::ClearBuffer => {
-                        let kind =
-                            history::Kind::from_input_buffer(buffer.clone());
+                        let kind = history::Kind::from(buffer.clone());
 
                         let event = history.clear_messages(kind, clients).map(
                             |history_task| Event::Cleared {

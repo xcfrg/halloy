@@ -36,15 +36,14 @@ use data::config::{self, Config, Runtime, runtime};
 use data::history::filter::FilterChain;
 use data::history::manager::{EchoEvent, ReactionToEcho, ReplyToEcho};
 use data::history::reroute::RerouteRules;
+use data::history::{self, storage};
 use data::message::{self, Broadcast};
 use data::reaction::Reaction;
 use data::redaction::Redaction;
 use data::target::{self, Target};
 use data::user::Nick;
 use data::version::Version;
-use data::{
-    Notification, Server, Url, User, environment, history, server, version,
-};
+use data::{Notification, Server, Url, User, environment, server, version};
 use iced::widget::{column, container};
 use iced::{Length, Subscription, Task, padding};
 use screen::{dashboard, help, welcome};
@@ -241,6 +240,7 @@ struct Halloy {
     current_mode: appearance::Mode,
     theme: Theme,
     config: Config,
+    history: storage::Manager,
     clients: data::client::Map,
     servers: server::Map,
     controllers: stream::Map,

@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::{fmt, io};
 
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
@@ -10,6 +10,7 @@ use futures::future::BoxFuture;
 use tokio::fs;
 use tokio::time::Instant;
 
+pub use self::kind::Kind;
 pub use self::manager::{
     EchoEvent, Manager, ReactionToEcho, ReplyToEcho, Resource,
 };
@@ -18,14 +19,15 @@ use crate::capabilities::LabeledResponseContext;
 use crate::message::{self, Direction, MessageReferences, Source};
 use crate::reaction::Reaction;
 use crate::redaction::Redaction;
-use crate::target::{self, Target};
+use crate::target::Target;
 use crate::user::Nick;
 use crate::{
-    Buffer, Message, Server, buffer, compression, config, environment,
-    isupport, reaction, redaction,
+    Message, Server, compression, config, environment, isupport, reaction,
+    redaction,
 };
 
 pub mod filter;
+mod kind;
 pub mod manager;
 pub mod metadata;
 pub mod reroute;
@@ -43,168 +45,6 @@ const FLUSH_COUNT: usize = 1000;
 pub(crate) fn truncate_messages(messages: &mut Vec<Message>) {
     if messages.len() > MAX_MESSAGES {
         messages.drain(0..messages.len() - (MAX_MESSAGES - TRUNC_COUNT));
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Kind {
-    Server(Server),
-    Channel(Server, target::Channel),
-    Query(Server, target::Query),
-    Logs,
-    Highlights,
-    ChannelMonitor,
-}
-
-impl Kind {
-    pub fn from_target(server: Server, target: Target) -> Self {
-        match target {
-            Target::Channel(channel) => Self::Channel(server, channel),
-            Target::Query(query) => Self::Query(server, query),
-        }
-    }
-
-    pub fn from_str(
-        server: Server,
-        chantypes: &[char],
-        statusmsg: &[char],
-        casemapping: isupport::CaseMap,
-        target: &str,
-    ) -> Self {
-        Self::from_target(
-            server,
-            Target::parse(target, chantypes, statusmsg, casemapping),
-        )
-    }
-
-    pub fn from_input_buffer(buffer: buffer::Upstream) -> Self {
-        match buffer {
-            buffer::Upstream::Server(server) => Self::Server(server),
-            buffer::Upstream::Channel(server, channel) => {
-                Self::Channel(server, channel)
-            }
-            buffer::Upstream::Query(server, nick) => Self::Query(server, nick),
-        }
-    }
-
-    pub fn from_server_message(
-        server: &Server,
-        message: &Message,
-    ) -> Option<Self> {
-        Self::from_server_message_target(server, &message.target)
-    }
-
-    pub fn from_server_message_rerouted_from(
-        server: &Server,
-        message: &Message,
-    ) -> Option<Self> {
-        message.rerouted_from.as_ref().and_then(|rerouted_from| {
-            Self::from_server_message_target(server, rerouted_from)
-        })
-    }
-
-    fn from_server_message_target(
-        server: &Server,
-        target: &message::Target,
-    ) -> Option<Self> {
-        match target {
-            message::Target::Server { .. } => {
-                Some(Self::Server(server.clone()))
-            }
-            message::Target::Channel { channel, .. } => {
-                Some(Self::Channel(server.clone(), channel.clone()))
-            }
-            message::Target::Query { query, .. } => {
-                Some(Self::Query(server.clone(), query.clone()))
-            }
-            message::Target::Logs { .. } => None,
-            message::Target::Highlights { .. } => None,
-            message::Target::ChannelMonitor { .. } => None,
-        }
-    }
-
-    pub fn from_buffer(buffer: Buffer) -> Option<Self> {
-        match buffer {
-            Buffer::Upstream(buffer::Upstream::Server(server)) => {
-                Some(Kind::Server(server))
-            }
-            Buffer::Upstream(buffer::Upstream::Channel(server, channel)) => {
-                Some(Kind::Channel(server, channel))
-            }
-            Buffer::Upstream(buffer::Upstream::Query(server, nick)) => {
-                Some(Kind::Query(server, nick))
-            }
-            Buffer::Internal(buffer::Internal::Logs) => Some(Kind::Logs),
-            Buffer::Internal(buffer::Internal::Highlights) => {
-                Some(Kind::Highlights)
-            }
-            Buffer::Internal(buffer::Internal::FileTransfers) => None,
-            Buffer::Internal(buffer::Internal::ChannelMonitor) => {
-                Some(Kind::ChannelMonitor)
-            }
-            Buffer::Internal(buffer::Internal::ChannelDiscovery(_)) => None,
-            Buffer::Internal(buffer::Internal::ConfigEditor) => None,
-        }
-    }
-}
-
-impl Kind {
-    pub fn server(&self) -> Option<&Server> {
-        match self {
-            Kind::Server(server) => Some(server),
-            Kind::Channel(server, _) => Some(server),
-            Kind::Query(server, _) => Some(server),
-            Kind::Logs => None,
-            Kind::Highlights => None,
-            Kind::ChannelMonitor => None,
-        }
-    }
-
-    pub fn target(&self) -> Option<Target> {
-        match self {
-            Kind::Server(_) => None,
-            Kind::Channel(_, channel) => Some(Target::Channel(channel.clone())),
-            Kind::Query(_, nick) => Some(Target::Query(nick.clone())),
-            Kind::Logs => None,
-            Kind::Highlights => None,
-            Kind::ChannelMonitor => None,
-        }
-    }
-}
-
-impl fmt::Display for Kind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Kind::Server(server) => write!(f, "server on {server}"),
-            Kind::Channel(server, channel) => {
-                write!(f, "channel {channel} on {server}")
-            }
-            Kind::Query(server, nick) => write!(f, "user {nick} on {server}"),
-            Kind::Logs => write!(f, "logs"),
-            Kind::Highlights => write!(f, "highlights"),
-            Kind::ChannelMonitor => write!(f, "channel monitor"),
-        }
-    }
-}
-
-impl From<Kind> for Buffer {
-    fn from(kind: Kind) -> Self {
-        match kind {
-            Kind::Server(server) => {
-                Buffer::Upstream(buffer::Upstream::Server(server))
-            }
-            Kind::Channel(server, channel) => {
-                Buffer::Upstream(buffer::Upstream::Channel(server, channel))
-            }
-            Kind::Query(server, nick) => {
-                Buffer::Upstream(buffer::Upstream::Query(server, nick))
-            }
-            Kind::Logs => Buffer::Internal(buffer::Internal::Logs),
-            Kind::Highlights => Buffer::Internal(buffer::Internal::Highlights),
-            Kind::ChannelMonitor => {
-                Buffer::Internal(buffer::Internal::ChannelMonitor)
-            }
-        }
     }
 }
 
@@ -1552,16 +1392,25 @@ impl History {
     }
 }
 
-/// Insert the incoming message into the provided vector, sorted
-/// on server time
+/// Insert the incoming message into the provided vector, sorted on server
+/// time.
 ///
-/// Deduplication is only checked +/- 1 second around the server time
-/// of the incoming message. Either message IDs match, or server times
-/// have an exact match + target & content.
+/// Deduplication is peformed for:
+///  - Messages that the server has marked as historical (e.g. chathistory or
+///    ZNC-playback)
+///  - Messages with an exact ID match
+///  - Echoes (labeled via labeled-response, or unlabeled)
+/// For non-echoes a search window of +/- 1 second around the server time of the
+/// incoming message is used.  For labeled echoes the exact time should be
+/// either be stored locally, or the message was sent from another client.  For
+/// unlabled echoes a search window of +/- 300s is used to account for transit
+/// time and potential clock skew. For matching methods that do not have an
+/// identifier (i.e. when matching historical messages without an ID or unlabled
+/// echoes) the messages must have an exact match + target & / content.
 ///
-/// A non-None return value indicates whether a message sent from / this client
-/// was replaced by an echo (and the replacement's server_time corresponds to
-/// the ReadMarker)
+/// A non-None return value indicates a message sent from this client was was
+/// replaced by an echo (and the replacement's server_time corresponds to the
+/// ReadMarker).
 pub fn insert_message(
     messages: &mut Vec<Message>,
     message: Message,

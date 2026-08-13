@@ -12,10 +12,10 @@ use data::capabilities::{
 use data::config::buffer::{ScrollPosition, UsernameFormat};
 use data::dashboard::{self, BufferAction};
 use data::environment::{RELEASE_WEBSITE, WIKI_WEBSITE};
-use data::history::ReadMarker;
 use data::history::filter::Filter;
 use data::history::manager::EchoEvent;
 use data::history::reroute::RerouteRules;
+use data::history::{self, ReadMarker, model};
 use data::isupport::{self, ChatHistorySubcommand, MessageReference};
 use data::message::{self, Broadcast};
 use data::rate_limit::TokenPriority;
@@ -23,8 +23,8 @@ use data::target::{self, Target};
 use data::user::Nick;
 use data::{
     Config, Image, Notification, Server, User, Version, cache, client, command,
-    config, environment, file_transfer, history, preview, reaction, redaction,
-    server, server_icon, stream,
+    config, environment, file_transfer, preview, reaction, redaction, server,
+    server_icon, stream,
 };
 use iced::widget::pane_grid::{self, PaneGrid};
 use iced::widget::{Space, center, column, container, row, stack, text};
@@ -61,7 +61,7 @@ pub struct Dashboard {
     focus: Focus,
     focus_history: VecDeque<pane_grid::Pane>,
     side_menu: Sidebar,
-    history: history::Manager,
+    history: model::Manager,
     last_changed: Option<Instant>,
     command_bar: Option<CommandBar>,
     command_bar_window: Option<window::Id>,
@@ -81,7 +81,7 @@ pub enum Message {
     Pane(window::Id, pane::Message),
     Sidebar(sidebar::Message),
     SelectedText(Vec<(RangeInclusive<f32>, String)>, clipboard::ClipboardKind),
-    History(history::manager::Message),
+    History(model::Message),
     DashboardSaved(Result<(), data::dashboard::Error>),
     Task(command_bar::Message),
     Shortcut(shortcut::Command),
@@ -147,7 +147,7 @@ impl Dashboard {
             },
             focus_history: VecDeque::new(),
             side_menu: sidebar,
-            history: history::Manager::default(),
+            history: model::Manager::default(),
             last_changed: None,
             command_bar: None,
             command_bar_window: None,
@@ -2297,10 +2297,10 @@ impl Dashboard {
                         server_time,
                         hash,
                     ) => {
-                        if let Some(kind) =
-                            pane.buffer.upstream().map(|buffer| {
-                                history::Kind::from_input_buffer(buffer.clone())
-                            })
+                        if let Some(kind) = pane
+                            .buffer
+                            .upstream()
+                            .map(|buffer| history::Kind::from(buffer.clone()))
                             && let Some(future) = self.history.remove_message(
                                 kind,
                                 server_time,
@@ -2319,10 +2319,10 @@ impl Dashboard {
                         server_time,
                         hash,
                     ) => {
-                        if let Some(kind) =
-                            pane.buffer.upstream().map(|buffer| {
-                                history::Kind::from_input_buffer(buffer.clone())
-                            })
+                        if let Some(kind) = pane
+                            .buffer
+                            .upstream()
+                            .map(|buffer| history::Kind::from(buffer.clone()))
                             && let Some(future) = self.history.remove_message(
                                 kind,
                                 server_time,
@@ -2395,10 +2395,10 @@ impl Dashboard {
                         server_time,
                         hash,
                     ) => {
-                        if let Some(kind) =
-                            pane.buffer.upstream().map(|buffer| {
-                                history::Kind::from_input_buffer(buffer.clone())
-                            })
+                        if let Some(kind) = pane
+                            .buffer
+                            .upstream()
+                            .map(|buffer| history::Kind::from(buffer.clone()))
                         {
                             self.history.expand_message(
                                 kind,
@@ -2414,10 +2414,10 @@ impl Dashboard {
                         server_time,
                         hash,
                     ) => {
-                        if let Some(kind) =
-                            pane.buffer.upstream().map(|buffer| {
-                                history::Kind::from_input_buffer(buffer.clone())
-                            })
+                        if let Some(kind) = pane
+                            .buffer
+                            .upstream()
+                            .map(|buffer| history::Kind::from(buffer.clone()))
                         {
                             self.history.contract_message(
                                 kind,
