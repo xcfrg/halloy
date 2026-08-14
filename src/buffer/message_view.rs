@@ -159,7 +159,7 @@ impl<'a> ChannelQueryLayout<'a> {
         }
 
         // Message MUST be PRIVMSG, NOTICE, or TAGMSG
-        match message.target.source() {
+        match &message.source {
             message::Source::User(_) | message::Source::Action(_) => true,
             message::Source::Server(_) | message::Source::Internal(_) => false,
         }
@@ -888,7 +888,7 @@ impl<'a> ChannelQueryLayout<'a> {
 
         let range_end_timestamp = if let message::Source::Internal(
             message::source::Internal::Condensed(end_server_time),
-        ) = message.target.source()
+        ) = &message.source
             && message.server_time != *end_server_time
         {
             formatter
@@ -993,10 +993,7 @@ impl<'a> ChannelQueryLayout<'a> {
         use data::buffer::Alignment;
         use message::Source;
         matches!(
-            (
-                message.target.source(),
-                self.config.buffer.nickname.alignment,
-            ),
+            (message.source, self.config.buffer.nickname.alignment,),
             (Source::User(_), Alignment::Top)
         )
     }
@@ -1175,10 +1172,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
                             self.previews.get(url)
                             && visible_for_source.is_none_or(
                                 |visible_for_source| {
-                                    visible_for_source(
-                                        preview,
-                                        message.target.source(),
-                                    )
+                                    visible_for_source(preview, &message.source)
                                 },
                             )
                         {
@@ -1226,7 +1220,7 @@ impl<'a> LayoutMessage<'a> for ChannelQueryLayout<'a> {
             Option<Element<'a, Message>>,
             Element<'a, Message>,
             Vec<Element<'a, Message>>,
-        ) = match message.target.source() {
+        ) = match &message.source {
             message::Source::User(user) => Some(self.format_user_message(
                 message,
                 &hidden_fragments,

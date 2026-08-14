@@ -188,7 +188,7 @@ impl Filter {
     /// [`Message`]:crate::MessageRegex
     pub fn match_message(&self, message: &Message) -> bool {
         match &self.target {
-            FilterTarget::User(user) => match &message.target.source() {
+            FilterTarget::User(user) => match &message.source {
                 Source::Action(Some(msg_user)) | Source::User(msg_user) => {
                     msg_user.nickname() == user.nickname()
                 }
@@ -204,7 +204,7 @@ impl Filter {
                 }
                 _ => false,
             },
-            FilterTarget::UserRegex(regex) => match &message.target.source() {
+            FilterTarget::UserRegex(regex) => match &message.source {
                 Source::Action(Some(msg_user)) | Source::User(msg_user) => {
                     regex
                         .is_match(msg_user.as_str())

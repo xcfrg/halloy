@@ -1568,7 +1568,7 @@ fn has_matching_content(
     use_echo_cmp: bool,
 ) -> bool {
     if message.target == other.target {
-        if let message::Source::Server(Some(source)) = message.target.source() {
+        if let message::Source::Server(Some(source)) = &message.source {
             match source.kind() {
                 message::source::server::Kind::Join
                 | message::source::server::Kind::Part
@@ -1643,7 +1643,7 @@ pub fn update_last_seen(
     last_seen: &mut HashMap<Nick, DateTime<Utc>>,
     message: &Message,
 ) {
-    if let Source::User(user) = message.target.source() {
+    if let Source::User(user) = &message.source {
         let nickname = user.nickname().to_owned();
 
         if let Some(date_time) = last_seen.get_mut(&nickname) {

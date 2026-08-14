@@ -1011,7 +1011,7 @@ impl Manager {
     ) {
         message.blocked = false;
 
-        if let message::Source::Server(source) = message.target.source() {
+        if let message::Source::Server(source) = &message.source {
             // Check if target is included/excluded.
             let target_ref = match &message.target {
                 message::Target::Channel { channel, .. }
@@ -1067,7 +1067,7 @@ impl Manager {
                         .find_map(|historical_message| {
                             if let crate::message::Source::Server(
                                 historical_source,
-                            ) = historical_message.target.source()
+                            ) = &historical_message.source
                                 && let Some(historical_source_kind) = source
                                     .as_ref()
                                     .map(message::source::server::Server::kind)
@@ -1107,7 +1107,7 @@ impl Manager {
                         .find_map(|historical_message| {
                             if let crate::message::Source::User(
                                 historical_message_user,
-                            ) = historical_message.target.source()
+                            ) = &historical_message.source
                                 && historical_message_user.nickname() == nick
                             {
                                 return Some(smart_filter_message(
@@ -1278,7 +1278,7 @@ impl Manager {
             {
                 message.blocked = true;
             } else {
-                match message.target.source() {
+                match &message.source {
                     message::Source::Server(source) => {
                         let server = if let Some(server) = kind.server() {
                             Some(server)
@@ -1702,7 +1702,7 @@ impl Data {
                             .map(std::convert::AsRef::as_ref)
                     }
                 } else {
-                    match message.target.source() {
+                    match &message.source {
                         message::Source::Internal(
                             message::source::Internal::Status(status),
                         ) => {

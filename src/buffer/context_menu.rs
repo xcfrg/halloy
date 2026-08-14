@@ -854,7 +854,7 @@ impl Entry {
                 }),
             ) => {
                 if let Some(msgid) = message.id.as_ref()
-                    && let Some(user) = message.target.source().user()
+                    && let Some(user) = message.source.user()
                 {
                     menu_button(
                         "Reply".to_string(),
@@ -1109,7 +1109,7 @@ pub fn message<'a, M>(
 where
     M: From<Message> + 'a,
 {
-    if matches!(message.target.source(), message::Source::Internal(_)) {
+    if matches!(message.source, message::Source::Internal(_)) {
         return content.into();
     }
 

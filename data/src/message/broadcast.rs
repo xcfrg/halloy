@@ -27,37 +27,33 @@ fn expand(
     received_with_server_time: bool,
 ) -> Vec<Message> {
     let message = |target, content| -> Message {
+        let source = match &cause {
+            Cause::Server(server) => Source::Server(server.clone()),
+            Cause::Status(status) => {
+                Source::Internal(source::Internal::Status(status.clone()))
+            }
+        };
+
         let received_at = Posix::now();
         let hash = message::Hash::new(&server_time, &content, &received_at);
 
         Message {
             received_at,
             server_time,
-            direction: Direction::Received,
+            direction: Direction::Received {
+                is_echo: false,
+                received_with_server_time,
+            },
+            source,
             target,
             content,
             id: None,
             reply_to: None,
-            reply_preview: None,
             hash,
             hidden_urls: HashSet::default(),
-            is_echo: false,
-            received_with_server_time,
-            blocked: false,
-            condensed: None,
-            expanded: false,
-            command: None,
             reactions: vec![],
             rerouted_from: None,
-            deduplicate: false,
             redaction: None,
-        }
-    };
-
-    let source = match cause {
-        Cause::Server(server) => Source::Server(server),
-        Cause::Status(status) => {
-            Source::Internal(source::Internal::Status(status))
         }
     };
 
@@ -67,7 +63,6 @@ fn expand(
             message(
                 Target::Channel {
                     channel: channel.clone(),
-                    source: source.clone(),
                 },
                 content.clone(),
             )
@@ -76,19 +71,11 @@ fn expand(
             message(
                 Target::Query {
                     query: query.clone(),
-                    source: source.clone(),
                 },
                 content.clone(),
             )
         }))
-        .chain(include_server.then(|| {
-            message(
-                Target::Server {
-                    source: source.clone(),
-                },
-                content.clone(),
-            )
-        }))
+        .chain(include_server.then(|| message(Target::Server, content.clone())))
         .collect()
 }
 

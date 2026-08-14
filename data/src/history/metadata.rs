@@ -52,7 +52,7 @@ impl ReadMarker {
             .rev()
             .find(|message| {
                 !message.blocked
-                    && match message.target.source() {
+                    && match &message.source {
                         source::Source::Internal(source) => match source {
                             source::Internal::Status(_)
                             | source::Internal::Condensed(_) => false,

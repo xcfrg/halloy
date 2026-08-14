@@ -129,9 +129,7 @@ impl ChannelMonitor {
             return None;
         }
 
-        let crate::message::Target::Channel {
-            channel, source, ..
-        } = &message.target
+        let crate::message::Target::Channel { channel } = &message.target
         else {
             return None;
         };
@@ -143,7 +141,6 @@ impl ChannelMonitor {
             target: crate::message::Target::ChannelMonitor {
                 server: server.clone(),
                 channel: channel.clone(),
-                source: source.clone(),
             },
             ..message.clone()
         };
@@ -260,14 +257,11 @@ fn task(
 }
 
 fn is_channel_message(message: &crate::Message) -> bool {
-    matches!(
-        &message.target,
-        crate::message::Target::Channel {
-            source: crate::message::Source::User(_)
-                | crate::message::Source::Action(_),
-            ..
-        }
-    )
+    matches!(&message.target, crate::message::Target::Channel { .. })
+        && matches!(&message.source
+                crate::message::Source::User(_)
+                    | crate::message::Source::Action(_)
+        )
 }
 
 fn apply(
