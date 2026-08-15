@@ -1,14 +1,15 @@
-use chrono::{DateTime, Utc};
-use tokio::sync::{mpsc, watch};
+use std::collections::HashMap;
 
-use super::Kind;
+use chrono::{DateTime, Utc};
+
 use super::metadata::ReadMarker;
+use super::{Kind, Storage, smart_filter_internal_message};
 use crate::{Config, message};
 
 #[derive(Debug, Clone)]
 pub enum Message {
     Insert(Kind, Model),
-    Update(Kind, Update),
+    Update(Kind, Vec<Update>),
     Remove(Kind),
 }
 
@@ -18,8 +19,15 @@ pub struct Manager {
 }
 
 impl Manager {
-    pub fn view(&self, kind: &Kind, config: &Config) -> Option<View<'_>> {
-        self.models.get(kind).map(|model| model.view(config))
+    pub fn view(
+        &self,
+        kind: &Kind,
+        request_limit: &message::Limit,
+        config: &Config,
+    ) -> Option<View<'_>> {
+        self.models
+            .get(kind)
+            .map(|model| model.view(request_limit, config))
     }
 
     pub fn update(&mut self, message: Message) {
@@ -27,38 +35,43 @@ impl Manager {
             Message::Insert(kind, model) => {
                 self.models.insert(kind, model);
             }
-            Message::Update(kind, update) => {
+            Message::Update(kind, updates) => {
                 if let Some(model) = self.models.get_mut(&kind) {
-                    model.update(update);
+                    for update in updates {
+                        model.update(update);
+                    }
                 }
             }
-            Message::Remove(kind) => self.models.remove(&kind),
+            Message::Remove(kind) => {
+                self.models.remove(&kind);
+            }
         }
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum Update {
     Base {
         show_in_sidebar: bool,
         read_marker: Option<ReadMarker>,
         display_read_marker: Option<ReadMarker>,
-        max_triggers_unread: Option<DateTime<Utc>>,
-        max_triggers_highlight: Option<DateTime<Utc>>,
+        latest_triggers_unread: Option<DateTime<Utc>>,
+        latest_triggers_highlight: Option<DateTime<Utc>>,
     },
-    Pane(pane),
+    Pane(Pane),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone)]
 pub struct Model {
     show_in_sidebar: bool,
     read_marker: Option<ReadMarker>,
     display_read_marker: Option<ReadMarker>,
-    max_triggers_unread: Option<DateTime<Utc>>,
-    max_triggers_highlight: Option<DateTime<Utc>>,
+    latest_triggers_unread: Option<DateTime<Utc>>,
+    latest_triggers_highlight: Option<DateTime<Utc>>,
     pane: Pane,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default, Clone)]
 pub enum Pane {
     Open {
         has_more_older_messages: bool,
@@ -66,19 +79,24 @@ pub enum Pane {
         messages: Vec<message::MessageDisplay>, // sorted by MessageDisplay.message.server_time
         limit: message::Limit,
     },
+    #[default]
     Closed,
 }
 
-impl From<&Storage> for Model {}
+impl From<&Storage> for Model {
+    fn from(storage: &Storage) -> Self {
+        Self::default().with(storage.model_base_update())
+    }
+}
 
-pub impl Model {
+impl Model {
     pub fn view(
         &self,
-        request_limit: message::Limit,
+        request_limit: &message::Limit,
         config: &Config,
     ) -> View<'_> {
         match &self.pane {
-            Open {
+            Pane::Open {
                 has_more_older_messages,
                 has_more_newer_messages,
                 messages,
@@ -111,29 +129,34 @@ pub impl Model {
                     loading: request_limit != limit,
                 }
             }
-            Closed => View::default(),
+            Pane::Closed => View::default(),
         }
     }
 
-    pub fn update(&mut self, update: Update) -> Event {
+    pub fn update(&mut self, update: Update) {
         match update {
             Update::Base {
                 show_in_sidebar,
                 read_marker,
                 display_read_marker,
-                max_triggers_unread,
-                max_triggers_highlight,
+                latest_triggers_unread,
+                latest_triggers_highlight,
             } => {
                 self.show_in_sidebar = show_in_sidebar;
                 self.read_marker = read_marker;
                 self.display_read_marker = display_read_marker;
-                self.max_triggers_unread = max_triggers_unread;
-                self.max_triggers_highlight = max_triggers_highlight;
+                self.latest_triggers_unread = latest_triggers_unread;
+                self.latest_triggers_highlight = latest_triggers_highlight;
             }
             Update::Pane(pane) => {
                 self.pane = pane;
             }
         }
+    }
+
+    pub fn with(mut self, update: Update) -> Self {
+        self.update(update);
+        self
     }
 }
 
@@ -149,10 +172,10 @@ pub struct View<'a> {
 /// MessageDisplay processing that must happen at view-time (e.g. filtering
 /// messages based on how long ago they were received) is done here.  All
 /// other processing is done by Storage.
-fn process_messages(
-    &messages: Vec<message::MessageDisplay>,
+fn process_messages<'a>(
+    messages: &'a [message::MessageDisplay],
     config: &Config,
-) -> Vec<&message::MessageDisplay> {
+) -> Vec<&'a message::MessageDisplay> {
     let current_time = Utc::now();
 
     messages
@@ -196,16 +219,4 @@ fn process_messages(
             }
         })
         .collect::<Vec<_>>()
-}
-
-fn smart_filter_internal_message(
-    message: &message::MessageDisplay,
-    seconds: &i64,
-    current_time: &DateTime<Utc>,
-) -> bool {
-    let duration_seconds = current_time
-        .signed_duration_since(message.server_time())
-        .num_seconds();
-
-    duration_seconds > *seconds
 }

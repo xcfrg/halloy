@@ -1042,7 +1042,7 @@ impl Buffer {
 
     pub fn scroll_to_message(
         &mut self,
-        message: message::Hash,
+        history_id: history::Id,
         history: &history::Manager,
         config: &Config,
     ) -> Task<Message> {
@@ -1054,7 +1054,7 @@ impl Buffer {
             Buffer::Channel(state) => state
                 .scroll_view
                 .scroll_to_message(
-                    message,
+                    history_id,
                     scroll_view::Kind::Channel(&state.server, &state.target),
                     history,
                     config,
@@ -1065,7 +1065,7 @@ impl Buffer {
             Buffer::Server(state) => state
                 .scroll_view
                 .scroll_to_message(
-                    message,
+                    history_id,
                     scroll_view::Kind::Server(&state.server),
                     history,
                     config,
@@ -1076,7 +1076,7 @@ impl Buffer {
             Buffer::Query(state) => state
                 .scroll_view
                 .scroll_to_message(
-                    message,
+                    history_id,
                     scroll_view::Kind::Query(&state.server, &state.target),
                     history,
                     config,
@@ -1087,7 +1087,7 @@ impl Buffer {
             Buffer::Logs(state) => state
                 .scroll_view
                 .scroll_to_message(
-                    message,
+                    history_id,
                     scroll_view::Kind::Logs,
                     history,
                     config,
@@ -1101,7 +1101,7 @@ impl Buffer {
                 state
                     .scroll_view
                     .scroll_to_message(
-                        message,
+                        history_id,
                         kind.scroll_view(),
                         history,
                         config,

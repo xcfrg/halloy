@@ -66,8 +66,8 @@ impl ReadMarker {
             .map(Self)
     }
 
-    pub fn date_time(self) -> DateTime<Utc> {
-        self.0
+    pub fn date_time(&self) -> &DateTime<Utc> {
+        &self.0
     }
 }
 

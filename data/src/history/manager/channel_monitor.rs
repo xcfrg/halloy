@@ -5,7 +5,7 @@ use futures::future::BoxFuture;
 
 use super::{Data, Event, FilterChain, History, Manager, Message};
 use crate::capabilities::LabeledResponseContext;
-use crate::{client, config, history};
+use crate::{client, config, history, message};
 
 mod load;
 
@@ -256,11 +256,11 @@ fn task(
         .boxed()
 }
 
-fn is_channel_message(message: &crate::Message) -> bool {
-    matches!(&message.target, crate::message::Target::Channel { .. })
-        && matches!(&message.source
-                crate::message::Source::User(_)
-                    | crate::message::Source::Action(_)
+fn is_channel_message(message: &Message) -> bool {
+    matches!(&message.target, message::Target::Channel { .. })
+        && matches!(
+            &message.source,
+            message::Source::User(_) | message::Source::Action(_)
         )
 }
 

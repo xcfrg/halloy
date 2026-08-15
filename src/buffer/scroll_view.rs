@@ -1503,7 +1503,7 @@ impl State {
 
     pub fn scroll_to_message(
         &mut self,
-        message: message::Hash,
+        history_id: history::Id,
         kind: Kind,
         history: &history::Manager,
         config: &Config,

@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::hash::{DefaultHasher, Hash as _, Hasher};
 use std::iter;
 use std::sync::{Arc, LazyLock};
 
@@ -32,7 +31,9 @@ use crate::server::Server;
 use crate::target::join_targets;
 use crate::time::Posix;
 use crate::user::{ChannelUsers, Nick, NickRef};
-use crate::{Config, User, buffer, command, ctcp, isupport, message, target};
+use crate::{
+    Config, User, buffer, command, ctcp, history, isupport, message, target,
+};
 
 // References:
 // - https://datatracker.ietf.org/doc/html/rfc1738#section-5
@@ -320,7 +321,7 @@ pub enum Direction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplyPreview {
-    pub hash: Hash,
+    pub history_id: history::Id,
     pub server_time: DateTime<Utc>,
     pub user: Option<User>,
     pub content: Content,
@@ -349,16 +350,16 @@ impl ReplyPreview {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct Message {
     pub received_at: Posix,
+    pub history_id: history::Id,
     pub server_time: DateTime<Utc>,
     pub direction: Direction,
     pub source: Source,
     pub target: Target,
     pub content: Content,
     pub id: Option<Id>,
-    pub hash: Hash, // UUID?
     pub hidden_urls: HashSet<Url>,
     pub reactions: Vec<Reaction>,
     pub rerouted_from: Option<Target>,
@@ -366,35 +367,57 @@ pub struct Message {
     pub reply_to: Option<Id>,
 }
 
+#[derive(Debug, Clone)]
 pub struct MessageWithContext {
-    pub message: Message,
+    pub inner: Message,
     pub historical: bool, // i.e. from chathistory or ZNC-playback (needs deduplication)
     pub labeled_response: Option<LabeledResponseContext>,
 }
 
+#[derive(Debug, Clone)]
 pub struct MessageDisplay {
-    pub message: Message,
+    pub inner: Message,
     pub blocked: bool,
-    pub condensed: Option<Arc<MessageDisplay>>,
-    pub expanded: bool, // Only relevant if message.can_condense or message.redaction.is_some()
+    pub condensed: Option<Arc<Message>>,
+    pub expanded: bool, // Only relevant if message.can_condense() or message.redaction.is_some()
     pub reply_preview: Option<ReplyPreview>,
 }
 
 impl MessageDisplay {
+    pub fn history_id(&self) -> &history::Id {
+        &self.inner.history_id
+    }
+
     pub fn server_time(&self) -> &DateTime<Utc> {
-        &self.message.server_time
+        &self.inner.server_time
     }
 
     pub fn source(&self) -> &Source {
-        &self.message.source
+        &self.inner.source
+    }
+
+    pub fn target(&self) -> &Target {
+        &self.inner.target
     }
 
     pub fn content(&self) -> &Content {
-        &self.message.content
+        &self.inner.content
+    }
+
+    pub fn plain(&self) -> Option<&str> {
+        self.inner.plain()
+    }
+
+    pub fn text(&self) -> Cow<'_, str> {
+        self.inner.text()
     }
 
     pub fn redaction(&self) -> &Option<Redaction> {
-        &self.message.redaction
+        &self.inner.redaction
+    }
+
+    pub fn has_redaction(&self) -> bool {
+        self.inner.has_redaction()
     }
 
     pub fn redaction_expanded(
@@ -406,32 +429,32 @@ impl MessageDisplay {
     }
 
     pub fn is_sent(&self) -> bool {
-        self.message.is_sent()
+        self.inner.is_sent()
     }
 
     pub fn is_received(&self) -> bool {
-        self.message.is_received()
+        self.inner.is_received()
     }
 
     pub fn is_echo(&self) -> bool {
-        self.message.is_echo()
+        self.inner.is_echo()
     }
 
     pub fn can_condense(
         &self,
         condensation_config: &config::buffer::Condensation,
     ) -> bool {
-        self.message.can_condense(condensation_config)
+        self.inner.can_condense(condensation_config)
     }
 
     pub fn as_reply_preview(&self) -> ReplyPreview {
         ReplyPreview {
-            hash: self.message.hash,
-            server_time: self.message.server_time,
-            user: self.message.user().cloned(),
-            content: self.message.content.clone(),
+            history_id: self.inner.history_id,
+            server_time: self.inner.server_time,
+            user: self.inner.user().cloned(),
+            content: self.inner.content.clone(),
             in_reply_to: self.reply_preview.clone().map(Box::new),
-            redaction: self.message.redaction.clone(),
+            redaction: self.inner.redaction.clone(),
             blocked: self.blocked,
             is_action: matches!(self.source(), Source::Action(_)),
         }
@@ -485,21 +508,6 @@ impl MessageDisplay {
 }
 
 impl Message {
-    pub fn can_reference(&self) -> bool {
-        if self.is_sent()
-            || self.is_echo()
-            || matches!(self.source, Source::Internal(_))
-        {
-            return false;
-        } else if let Source::Server(source) = &self.source
-            && source.as_ref().is_none_or(|source| !source.can_reference())
-        {
-            return false;
-        }
-
-        self.received_with_server_time() || self.id.is_some()
-    }
-
     pub fn received_with_server_time(&self) -> bool {
         match &self.direction {
             Direction::Received {
@@ -539,6 +547,25 @@ impl Message {
         } else {
             false
         }
+    }
+
+    pub fn has_redaction(&self) -> bool {
+        self.redaction.is_some()
+    }
+
+    pub fn can_reference(&self) -> bool {
+        if self.is_sent()
+            || self.is_echo()
+            || matches!(self.source, Source::Internal(_))
+        {
+            return false;
+        } else if let Source::Server(source) = &self.source
+            && source.as_ref().is_none_or(|source| !source.can_reference())
+        {
+            return false;
+        }
+
+        self.received_with_server_time() || self.id.is_some()
     }
 
     pub fn references(&self) -> MessageReferences {
@@ -593,11 +620,10 @@ impl Message {
             casemapping,
             prefix,
         )?;
-        let received_at = Posix::now();
-        let hash = Hash::new(&server_time, &content, &received_at);
 
         Some(Message {
-            received_at,
+            received_at: Posix::now(),
+            history_id: history::Id::default(),
             server_time,
             direction: Direction::Received {
                 is_echo,
@@ -608,7 +634,6 @@ impl Message {
             content,
             id,
             reply_to,
-            hash,
             hidden_urls: HashSet::default(),
             reactions: vec![],
             rerouted_from,
@@ -663,7 +688,6 @@ impl Message {
             prefix,
         )?;
         let received_at = Posix::now();
-        let hash = Hash::new(&server_time, &content, &received_at);
 
         let message = Message {
             received_at,
@@ -677,7 +701,7 @@ impl Message {
             content,
             id,
             reply_to,
-            hash,
+            history_id: history::Id::default(),
             hidden_urls: HashSet::default(),
             reactions: vec![],
             rerouted_from,
@@ -731,20 +755,16 @@ impl Message {
         content: Content,
         command: Option<command::Irc>,
     ) -> Self {
-        let received_at = Posix::now();
-        let server_time = Utc::now();
-        let hash = Hash::new(&server_time, &content, &received_at);
-
         Message {
-            received_at,
-            server_time,
+            received_at: Posix::now(),
+            history_id: history::Id::default(),
+            server_time: Utc::now(),
             direction: Direction::Sent { command },
             target,
             source,
             content,
             id: None,
             reply_to: None,
-            hash,
             hidden_urls: HashSet::default(),
             reactions: vec![],
             rerouted_from: None,
@@ -757,17 +777,15 @@ impl Message {
         query: &target::Query,
         filename: &str,
     ) -> Message {
-        let received_at = Posix::now();
-        let server_time = Utc::now();
         let content = plain(format!(
             "{} wants to send you \"{filename}\"",
             from.nickname()
         ));
-        let hash = Hash::new(&server_time, &content, &received_at);
 
         Message {
-            received_at,
-            server_time,
+            received_at: Posix::now(),
+            history_id: history::Id::default(),
+            server_time: Utc::now(),
             direction: Direction::Received {
                 is_echo: false,
                 received_with_server_time: false,
@@ -779,7 +797,6 @@ impl Message {
             content,
             id: None,
             reply_to: None,
-            hash,
             hidden_urls: HashSet::default(),
             reactions: vec![],
             rerouted_from: None,
@@ -792,15 +809,13 @@ impl Message {
         query: &target::Query,
         filename: &str,
     ) -> Message {
-        let received_at = Posix::now();
-        let server_time = Utc::now();
         let content =
             plain(format!("Offering to send {} \"{filename}\"", to.nickname()));
-        let hash = Hash::new(&server_time, &content, &received_at);
 
         Message {
-            received_at,
-            server_time,
+            received_at: Posix::now(),
+            history_id: history::Id::default(),
+            server_time: Utc::now(),
             direction: Direction::Sent { command: None },
             source: Source::Action(None),
             target: Target::Query {
@@ -809,7 +824,6 @@ impl Message {
             content,
             id: None,
             reply_to: None,
-            hash,
             hidden_urls: HashSet::default(),
             reactions: vec![],
             rerouted_from: None,
@@ -868,15 +882,14 @@ impl Message {
     }
 
     pub fn log(record: crate::log::Record) -> Self {
-        let received_at = Posix::now();
         let server_time = record.timestamp;
         let target = Target::Logs;
         let source = Source::Internal(source::Internal::Logs(record.level));
         let content = Content::Log(record);
-        let hash = Hash::new(&server_time, &content, &received_at);
 
         Self {
-            received_at,
+            received_at: Posix::now(),
+            history_id: history::Id::default(),
             server_time,
             direction: Direction::Received {
                 is_echo: false,
@@ -887,7 +900,6 @@ impl Message {
             content,
             id: None,
             reply_to: None,
-            hash,
             hidden_urls: HashSet::default(),
             reactions: vec![],
             rerouted_from: None,
@@ -924,17 +936,17 @@ impl Message {
 }
 
 pub fn condense(
-    messages: &[&Message],
+    messages: &[&MessageDisplay],
     condense: &config::buffer::Condensation,
 ) -> Option<Arc<Message>> {
     if let (Some(first_message), Some(last_message)) =
         (messages.first(), messages.last())
     {
         let source = Source::Internal(source::Internal::Condensed(
-            last_message.server_time,
+            *last_message.server_time(),
         ));
 
-        let target = first_message.target.clone();
+        let target = first_message.target().clone();
 
         let nick_associations = find_nickname_associations(messages);
 
@@ -944,7 +956,7 @@ pub fn condense(
         // Convert messages to condensed fragments while grouping them based on
         // nickname association
         messages.iter().for_each(|message| {
-            if let Source::Server(Some(source)) = &message.source
+            if let Source::Server(Some(source)) = message.source()
                 && let Some(nick) = source.nick().map(NickRef::from)
                 && let Some((nick, nick_fragment)) = match source.kind() {
                     Kind::Join => Some((
@@ -975,7 +987,7 @@ pub fn condense(
                             Some(kicked.as_nickref())
                         } else {
                             find_other_nickname_in_message_content(
-                                &message.content,
+                                message.content(),
                                 nick,
                             )
                         };
@@ -1008,7 +1020,7 @@ pub fn condense(
                             ))
                         } else {
                             find_other_nickname_in_message_content(
-                                &message.content,
+                                message.content(),
                                 nick,
                             )
                             .map(NickRef::to_owned)
@@ -1107,7 +1119,8 @@ pub fn condense(
 
         Some(Arc::new(Message {
             received_at: Posix::now(),
-            server_time: first_message.server_time,
+            history_id: *first_message.history_id(),
+            server_time: *first_message.server_time(),
             direction: Direction::Received {
                 is_echo: false,
                 received_with_server_time: false,
@@ -1117,7 +1130,6 @@ pub fn condense(
             content: Content::Fragments(condensed_fragments),
             id: None,
             reply_to: None,
-            hash: first_message.hash,
             hidden_urls: HashSet::default(),
             reactions: vec![],
             rerouted_from: None,
@@ -1153,13 +1165,13 @@ enum NickAssociation<'a> {
 
 // Finds associations between nicknames via nickname changes
 fn find_nickname_associations<'a>(
-    messages: &'a [&'a Message],
+    messages: &'a [&'a MessageDisplay],
 ) -> IndexMap<NickRef<'a>, NickAssociation<'a>> {
     let mut nick_associations: IndexMap<NickRef, NickAssociation> =
         IndexMap::new();
 
     messages.iter().for_each(|message| {
-        if let Source::Server(Some(source)) = &message.source
+        if let Source::Server(Some(source)) = message.source()
             && let Some(nick) = source.nick().map(NickRef::from)
         {
             match source.kind() {
@@ -1176,7 +1188,7 @@ fn find_nickname_associations<'a>(
                             Some(kicked.as_nickref())
                         } else {
                             find_other_nickname_in_message_content(
-                                &message.content,
+                                message.content(),
                                 nick,
                             )
                         };
@@ -1195,7 +1207,7 @@ fn find_nickname_associations<'a>(
                             Some(new_nick.as_nickref())
                         } else {
                             find_other_nickname_in_message_content(
-                                &message.content,
+                                message.content(),
                                 nick,
                             )
                         };
@@ -1714,23 +1726,6 @@ fn condense_associated_fragments(
         })
         .flatten()
         .collect()
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Hash(u64);
-
-impl Hash {
-    pub fn new(
-        server_time: &DateTime<Utc>,
-        content: &Content,
-        received_at: &Posix,
-    ) -> Self {
-        let mut hasher = DefaultHasher::new();
-        server_time.hash(&mut hasher);
-        content.hash(&mut hasher);
-        received_at.hash(&mut hasher);
-        Self(hasher.finish())
-    }
 }
 
 pub fn plain(text: String) -> Content {
@@ -2279,12 +2274,6 @@ impl Content {
 impl PartialEq for Content {
     fn eq(&self, other: &Self) -> bool {
         self.text() == other.text()
-    }
-}
-
-impl std::hash::Hash for Content {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.text().hash(state);
     }
 }
 
@@ -3669,7 +3658,7 @@ pub enum Limit {
     Top(usize),
     Bottom(usize, Option<DateTime<Utc>>),
     Since(DateTime<Utc>),
-    Around(usize, Hash),
+    Around(usize, history::Id),
 }
 
 pub fn is_action(text: &str) -> bool {
@@ -3896,9 +3885,9 @@ pub enum Link {
     Channel(Server, target::Channel, Option<BufferAction>),
     Url(String),
     User(Server, User),
-    GoToMessage(Server, target::Channel, Hash, Option<BufferAction>),
-    ExpandMessage(DateTime<Utc>, Hash, Option<LinkContext>),
-    ContractMessage(DateTime<Utc>, Hash, Option<LinkContext>),
+    GoToMessage(Server, target::Channel, history::Id, Option<BufferAction>),
+    ExpandMessage(DateTime<Utc>, history::Id, Option<LinkContext>),
+    ContractMessage(DateTime<Utc>, history::Id, Option<LinkContext>),
 }
 
 #[derive(Debug, Clone)]

@@ -340,6 +340,7 @@ impl Filter {
     }
 }
 
+#[derive(Copy)]
 pub struct FilterChain<'f> {
     filters: &'f [Filter],
 }
@@ -364,17 +365,17 @@ impl<'f> FilterChain<'f> {
         self.filters.iter().any(|f| f.match_query(query, server))
     }
 
-    pub fn filter_message_of_kind(&self, message: &mut Message, kind: &Kind) {
-        message.blocked = self
-            .filters
+    pub fn filter_message_of_kind(
+        &self,
+        message: &Message,
+        kind: &Kind,
+    ) -> bool {
+        self.filters
             .iter()
             .filter(|f| {
-                if let message::Target::Highlights {
-                    server, channel, ..
-                }
-                | message::Target::ChannelMonitor {
-                    server, channel, ..
-                } = &message.target
+                if let message::Target::Highlights { server, channel }
+                | message::Target::ChannelMonitor { server, channel } =
+                    &message.target
                 {
                     f.match_kind(&Kind::Channel(
                         server.clone(),

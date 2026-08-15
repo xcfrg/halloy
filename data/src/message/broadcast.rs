@@ -10,7 +10,7 @@ use super::{
 use crate::config::buffer::UsernameFormat;
 use crate::time::Posix;
 use crate::user::Nick;
-use crate::{Config, User, isupport, message, target};
+use crate::{Config, User, history, isupport, message, target};
 
 enum Cause {
     Server(Option<source::Server>),
@@ -34,11 +34,9 @@ fn expand(
             }
         };
 
-        let received_at = Posix::now();
-        let hash = message::Hash::new(&server_time, &content, &received_at);
-
         Message {
-            received_at,
+            received_at: Posix::now(),
+            history_id: history::Id::default(),
             server_time,
             direction: Direction::Received {
                 is_echo: false,
@@ -49,7 +47,6 @@ fn expand(
             content,
             id: None,
             reply_to: None,
-            hash,
             hidden_urls: HashSet::default(),
             reactions: vec![],
             rerouted_from: None,

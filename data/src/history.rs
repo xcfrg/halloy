@@ -15,6 +15,8 @@ pub use self::manager::{
     EchoEvent, Manager, ReactionToEcho, ReplyToEcho, Resource,
 };
 pub use self::metadata::{Metadata, ReadMarker};
+pub use self::model::Model;
+pub use self::storage::Storage;
 use crate::capabilities::LabeledResponseContext;
 use crate::message::{self, Direction, MessageReferences, Source};
 use crate::reaction::Reaction;
@@ -30,7 +32,9 @@ pub mod filter;
 mod kind;
 pub mod manager;
 pub mod metadata;
+pub mod model;
 pub mod reroute;
+pub mod storage;
 
 // TODO: Make this configurable?
 /// Max # messages to persist
@@ -41,6 +45,13 @@ const TRUNC_COUNT: usize = 500;
 const FLUSH_AFTER_LAST_RECEIVED: Duration = Duration::from_secs(5);
 /// # new messages to trigger flush even if FLUSH_AFTER_LAST_RECEIVED has not passed
 const FLUSH_COUNT: usize = 1000;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub enum Id {
+    #[default]
+    Undetermined,
+    Determined(u64),
+}
 
 pub(crate) fn truncate_messages(messages: &mut Vec<Message>) {
     if messages.len() > MAX_MESSAGES {
@@ -559,14 +570,14 @@ impl History {
     fn remove_message(
         &mut self,
         server_time: DateTime<Utc>,
-        hash: message::Hash,
+        history_id: Id,
     ) -> Option<Message> {
         match self {
             History::Partial {
                 pending_messages, ..
             } => pending_messages
                 .iter()
-                .position(|(message, _)| message.hash == hash)
+                .position(|(message, _)| message.history_id == history_id)
                 .map(|index| {
                     let (message, _) = pending_messages.remove(index);
                     message
@@ -596,7 +607,7 @@ impl History {
 
                 messages[start_index..end_index]
                     .iter()
-                    .position(|message| message.hash == hash)
+                    .position(|message| message.history_id == history_id)
                     .map(|slice_index| {
                         messages.remove(start_index + slice_index)
                     })
@@ -609,7 +620,7 @@ impl History {
     fn get_expansion_messages(
         &mut self,
         server_time: DateTime<Utc>,
-        hash: message::Hash,
+        history_id: Id,
         config: &config::buffer::Condensation,
     ) -> Vec<&mut Message> {
         match self {
@@ -641,7 +652,7 @@ impl History {
                     .iter()
                     .enumerate()
                     .find_map(|(slice_index, message)| {
-                        (message.hash == hash)
+                        (message.history_id == history_id)
                             .then_some(start_index + slice_index)
                     })
                 {
@@ -1195,14 +1206,14 @@ impl History {
         }
     }
 
-    pub fn hide_preview(&mut self, message: message::Hash, url: url::Url) {
+    pub fn hide_preview(&mut self, history_id: Id, url: url::Url) {
         if let Self::Full {
             messages,
             last_updated_at,
             ..
         } = self
             && let Some(message) =
-                messages.iter_mut().find(|m| m.hash == message)
+                messages.iter_mut().find(|m| m.history_id == history_id)
         {
             message.hidden_urls.insert(url);
 
@@ -1210,14 +1221,14 @@ impl History {
         }
     }
 
-    pub fn show_preview(&mut self, message: message::Hash, url: &url::Url) {
+    pub fn show_preview(&mut self, history_id: Id, url: &url::Url) {
         if let Self::Full {
             messages,
             last_updated_at,
             ..
         } = self
             && let Some(message) =
-                messages.iter_mut().find(|m| m.hash == message)
+                messages.iter_mut().find(|m| m.history_id == history_id)
         {
             message.hidden_urls.remove(url);
 
@@ -1737,4 +1748,50 @@ pub enum Error {
     Io(#[from] io::Error),
     #[error(transparent)]
     SerdeJson(#[from] serde_json::Error),
+}
+
+pub fn smart_filter_message(
+    message: &crate::Message,
+    seconds: &i64,
+    last_seen_server_time: Option<&DateTime<Utc>>,
+) -> bool {
+    let Some(server_time) = last_seen_server_time else {
+        return true;
+    };
+
+    let duration_seconds = message
+        .server_time
+        .signed_duration_since(*server_time)
+        .num_seconds();
+
+    duration_seconds > *seconds
+}
+
+pub fn smart_filter_repeat(
+    message: &crate::Message,
+    seconds: &i64,
+    last_seen_server_time: Option<&DateTime<Utc>>,
+) -> bool {
+    let Some(server_time) = last_seen_server_time else {
+        return false;
+    };
+
+    let duration_seconds = message
+        .server_time
+        .signed_duration_since(*server_time)
+        .num_seconds();
+
+    duration_seconds <= *seconds
+}
+
+pub fn smart_filter_internal_message(
+    message: &message::Message,
+    seconds: &i64,
+    current_time: &DateTime<Utc>,
+) -> bool {
+    let duration_seconds = current_time
+        .signed_duration_since(message.server_time)
+        .num_seconds();
+
+    duration_seconds > *seconds
 }
